@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>語音轉文字下載器</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <main class="container">
+      <section class="panel">
+        <h1>語音辨識轉字幕</h1>
+        <p class="subtitle">只支援音檔（mp3/wav/m4a），單檔上限 {{ max_file_mb }}MB。</p>
+        <p class="warning">系統不保留辨識檔案，請在完成後立即下載 TXT / SRT。</p>
+
+        <div class="auth">
+          <div id="googleBtn"></div>
+          <button id="logoutBtn" type="button" class="secondary" hidden>登出</button>
+          <p id="userInfo" class="status">請先使用 Google 登入</p>
+        </div>
+
+        <form id="transcribe-form">
+          <label class="field">
+            <span>模型</span>
+            <select id="model" name="model">
+              <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
+              <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
+              <option value="whisper-1">whisper-1</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>上傳音檔（mp3/wav/m4a）</span>
+            <input id="audioFile" name="audioFile" type="file" accept=".mp3,.wav,.m4a,audio/*" required />
+          </label>
+
+          <button id="submitBtn" type="submit" disabled>開始辨識</button>
+        </form>
+
+        <div id="adminPanel" class="admin" hidden>
+          <h2>管理者調整分鐘</h2>
+          <form id="admin-form">
+            <input id="targetEmail" type="email" placeholder="使用者 Email" required />
+            <input id="targetMinutes" type="number" min="0" step="0.1" placeholder="分鐘數" required />
+            <button type="submit">更新分鐘</button>
+          </form>
+          <p id="adminStatus" class="status"></p>
+        </div>
+
+        <p id="status" class="status">等待上傳檔案</p>
+
+        <div class="actions">
+          <button id="downloadTxt" disabled>下載 TXT</button>
+          <button id="downloadSrt" disabled>下載 SRT</button>
+        </div>
+
+        <label class="field">
+          <span>辨識結果</span>
+          <textarea id="resultText" rows="12" placeholder="完成後會顯示文字"></textarea>
+        </label>
+      </section>
+    </main>
+
+    <script>
+      window.GOOGLE_CLIENT_ID = "{{ google_client_id }}";
+    </script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
