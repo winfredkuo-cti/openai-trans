@@ -15,7 +15,7 @@ from fastapi.templating import Jinja2Templates
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token
 from openai import OpenAI
-from sqlalchemy import Boolean, Column, DateTime, Float, MetaData, String, Table, create_engine, func, select, text
+from sqlalchemy import Boolean, Column, DateTime, Float, MetaData, String, Table, create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 
 
@@ -81,6 +81,32 @@ logger = logging.getLogger(__name__)
 
 def init_db() -> None:
     metadata.create_all(engine)
+    ensure_users_schema()
+
+
+def ensure_users_schema() -> None:
+    existing_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    dialect = engine.dialect.name
+    statements: list[str] = []
+    if "name" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN name VARCHAR NOT NULL DEFAULT ''")
+    if "remaining_minutes" not in existing_columns:
+        statements.append("ALTER TABLE users ADD COLUMN remaining_minutes FLOAT NOT NULL DEFAULT 30")
+    if "is_admin" not in existing_columns:
+        default_false = "false" if dialect != "sqlite" else "0"
+        statements.append(f"ALTER TABLE users ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT {default_false}")
+    if "created_at" not in existing_columns:
+        column_type = "TIMESTAMP" if dialect != "sqlite" else "DATETIME"
+        statements.append(f"ALTER TABLE users ADD COLUMN created_at {column_type}")
+    if "updated_at" not in existing_columns:
+        column_type = "TIMESTAMP" if dialect != "sqlite" else "DATETIME"
+        statements.append(f"ALTER TABLE users ADD COLUMN updated_at {column_type}")
+
+    if not statements:
+        return
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
 
 
 @app.on_event("startup")
@@ -284,10 +310,12 @@ def serialize_user(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def serialize_admin_user(row: dict[str, Any]) -> dict[str, Any]:
+    created_at = row.get("created_at")
+    updated_at = row.get("updated_at")
     return {
         **serialize_user(row),
-        "created_at": row["created_at"].isoformat() if row.get("created_at") else "",
-        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else "",
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+        "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at or ""),
     }
 
 

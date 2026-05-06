@@ -93,7 +93,7 @@ async function loadAdminUsers() {
   renderAdminMessage("載入中...");
   try {
     const resp = await fetch("/api/admin/users");
-    const data = await resp.json();
+    const data = await readResponse(resp);
     if (!resp.ok) {
       throw new Error(data.detail || "載入使用者失敗");
     }
@@ -321,7 +321,7 @@ adminForm.addEventListener("submit", async (event) => {
   });
   const data = await readResponse(resp);
   if (!resp.ok) {
-    adminStatus.textContent = data.detail || "更新失敗";
+    adminStatus.textContent = data.detail || `更新失敗（${resp.status}）`;
     return;
   }
   adminStatus.textContent = `${data.user.email} 已更新為 ${data.user.remaining_minutes} 分鐘`;
