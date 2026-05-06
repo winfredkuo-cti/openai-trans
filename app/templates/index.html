@@ -37,6 +37,11 @@
             <span>上傳音檔（mp3/wav/m4a）</span>
             <input id="audioFile" name="audioFile" type="file" accept=".mp3,.wav,.m4a,audio/*" required />
           </label>
+          <div class="upload-note">
+            <strong>壓縮建議</strong>
+            <p>單檔上限 {{ max_file_mb }}MB。建議輸出成 96kbps，約可上傳 35 分鐘；64kbps 約 52 分鐘；128kbps 約 26 分鐘。</p>
+            <p>音檔 kbps 主要影響檔案大小，一般語音內容壓縮到 64-96kbps 不會明顯影響辨識能力。</p>
+          </div>
 
           <button id="submitBtn" type="submit" disabled>開始辨識</button>
         </form>

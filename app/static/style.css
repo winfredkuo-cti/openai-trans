@@ -68,6 +68,25 @@ form {
   line-height: 1.5;
 }
 
+.upload-note {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fbfd;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.upload-note strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.upload-note p {
+  margin: 4px 0 0;
+}
+
 input,
 select,
 textarea,
