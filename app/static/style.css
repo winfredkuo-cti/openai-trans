@@ -63,6 +63,11 @@ form {
   gap: 8px;
 }
 
+.field small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 input,
 select,
 textarea,

@@ -5,6 +5,7 @@
 - 顯示辨識文字內容
 - 下載 `transcript.txt`
 - 下載 `subtitle.srt`（可直接拿去影片上字幕）
+- 可指定音檔語言：繁體中文、英文、日文、韓文，或自動辨識
 - Google 登入後才能使用
 - 每位使用者預設 30 分鐘額度
 - 管理者（預設 `theoder@gmail.com`）可調整每位使用者分鐘數
@@ -49,7 +50,8 @@
 - 網頁不顯示 API Key 欄位，金鑰可完全留在 Worker 或伺服器環境變數。
 - 上傳限制為音檔：`mp3`、`wav`、`m4a`。
 - 預設單檔上限為 `25MB`，可用 `MAX_AUDIO_FILE_MB` 調整。
-- 支援 `gpt-4o-mini-transcribe`、`gpt-4o-transcribe`、`whisper-1`。
+- TXT 固定使用 `gpt-4o-mini-transcribe`，SRT 固定使用 `whisper-1`。
+- 若已知音檔語言，建議在上傳前指定語言，可讓語音辨識更快速。
 - 系統不保留辨識檔案，請立即下載 TXT / SRT。
 - 若未設定 `DATABASE_URL`，系統會回退使用本機 `app.db`（僅適合開發測試）。
 
