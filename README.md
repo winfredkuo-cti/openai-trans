@@ -67,4 +67,6 @@
    - `WORKER_TRANSCRIBE_URL`
 4. 在 Google OAuth 用戶端加入正式網域到 `Authorized JavaScript origins`，例如：
    - `https://你的專案.vercel.app`
+   並在 `Authorized redirect URIs` 加入 Google 登入回傳網址：
+   - `https://你的專案.vercel.app/api/auth/google/redirect`
 5. 重新部署。

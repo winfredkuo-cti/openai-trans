@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from google.auth.transport import requests as google_requests
@@ -216,6 +216,33 @@ def upsert_user(email: str, name: str) -> dict[str, Any]:
     return dict(row) if row else {}
 
 
+def verify_google_credential(credential: str) -> dict[str, Any]:
+    if not credential:
+        raise HTTPException(status_code=400, detail="Missing Google credential.")
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Server missing GOOGLE_CLIENT_ID.")
+
+    try:
+        info = id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            GOOGLE_CLIENT_ID,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Google sign-in verification failed: {exc}") from exc
+
+    email = str(info.get("email", "")).lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google account email is unavailable.")
+    name = str(info.get("name", email))
+    return upsert_user(email=email, name=name)
+
+
+def set_session_cookies(response: JSONResponse | RedirectResponse, email: str, secure: bool = False) -> None:
+    response.set_cookie("session_email", email, httponly=True, samesite="lax", secure=secure)
+    response.set_cookie("session_sig", SESSION_SECRET, httponly=True, samesite="lax", secure=secure)
+
+
 def serialize_user(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "email": row["email"],
@@ -305,28 +332,25 @@ async def home(request: Request) -> HTMLResponse:
 async def auth_google(request: Request) -> JSONResponse:
     body = await request.json()
     credential = body.get("credential", "")
-    if not credential:
-        raise HTTPException(status_code=400, detail="Missing Google credential.")
-    if not GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=500, detail="Server missing GOOGLE_CLIENT_ID.")
-
-    try:
-        info = id_token.verify_oauth2_token(
-            credential,
-            google_requests.Request(),
-            GOOGLE_CLIENT_ID,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Google sign-in verification failed: {exc}") from exc
-
-    email = str(info.get("email", "")).lower()
-    if not email:
-        raise HTTPException(status_code=401, detail="Google account email is unavailable.")
-    name = str(info.get("name", email))
-    user = upsert_user(email=email, name=name)
+    user = verify_google_credential(credential)
     response = JSONResponse({"user": serialize_user(user)})
-    response.set_cookie("session_email", email, httponly=True, samesite="lax", secure=False)
-    response.set_cookie("session_sig", SESSION_SECRET, httponly=True, samesite="lax", secure=False)
+    set_session_cookies(response, user["email"], secure=request.url.scheme == "https")
+    return response
+
+
+@app.post("/api/auth/google/redirect")
+async def auth_google_redirect(
+    request: Request,
+    credential: str = Form(...),
+    g_csrf_token: str | None = Form(None),
+) -> RedirectResponse:
+    cookie_csrf_token = request.cookies.get("g_csrf_token")
+    if g_csrf_token or cookie_csrf_token:
+        if not g_csrf_token or not cookie_csrf_token or g_csrf_token != cookie_csrf_token:
+            raise HTTPException(status_code=400, detail="Google sign-in CSRF check failed.")
+    user = verify_google_credential(credential)
+    response = RedirectResponse(url="/", status_code=303)
+    set_session_cookies(response, user["email"], secure=request.url.scheme == "https")
     return response
 
 

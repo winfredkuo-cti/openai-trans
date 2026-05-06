@@ -166,7 +166,10 @@ window.addEventListener("load", async () => {
   }
   google.accounts.id.initialize({
     client_id: window.GOOGLE_CLIENT_ID,
-    callback: handleCredentialResponse,
+    ux_mode: "redirect",
+    login_uri: `${window.location.origin}/api/auth/google/redirect`,
+    use_fedcm_for_button: true,
+    use_fedcm_for_prompt: true,
   });
   google.accounts.id.renderButton(document.getElementById("googleBtn"), { theme: "outline", size: "large" });
 });
