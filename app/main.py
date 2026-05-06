@@ -1,5 +1,6 @@
 import os
 import tempfile
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ users_table = Table(
     Column("email", String, primary_key=True),
     Column("name", String, nullable=False, server_default=""),
     Column("remaining_minutes", Float, nullable=False, server_default=text("30")),
-    Column("is_admin", Boolean, nullable=False, server_default=text("0")),
+    Column("is_admin", Boolean, nullable=False, server_default=text("false")),
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column("updated_at", DateTime, nullable=False, server_default=func.now()),
 )
@@ -52,6 +53,7 @@ def build_engine() -> Engine:
 
 
 engine = build_engine()
+logger = logging.getLogger(__name__)
 
 
 def init_db() -> None:
@@ -60,7 +62,11 @@ def init_db() -> None:
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
+    try:
+        init_db()
+    except Exception as exc:
+        # Do not crash the whole app at boot; surface DB issues on API calls instead.
+        logger.exception("Database initialization failed during startup: %s", exc)
 
 
 def format_srt_timestamp(seconds: float) -> str:
@@ -180,15 +186,20 @@ async def transcribe_via_worker(file: UploadFile, model: str) -> tuple[dict[str,
     file_bytes = await file.read()
     content_type = file.content_type or "application/octet-stream"
     filename = file.filename or "upload.bin"
-    try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(
-                WORKER_TRANSCRIBE_URL,
-                data={"model": model},
-                files={"file": (filename, file_bytes, content_type)},
-            )
-    except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Worker service unavailable: {exc}") from exc
+
+    async def call_worker(form_data: dict[str, str]) -> httpx.Response:
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                return await client.post(
+                    WORKER_TRANSCRIBE_URL,
+                    data=form_data,
+                    files={"file": (filename, file_bytes, content_type)},
+                )
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=502, detail=f"Worker service unavailable: {exc}") from exc
+
+    # Try multiple compatible keys because different Worker versions read different field names.
+    response = await call_worker({"model": model, "response_format": "json"})
     if response.status_code >= 400:
         detail = response.text
         try:
@@ -197,7 +208,19 @@ async def transcribe_via_worker(file: UploadFile, model: str) -> tuple[dict[str,
                 detail = str(body.get("detail", detail))
         except Exception:
             pass
-        raise HTTPException(status_code=response.status_code, detail=detail)
+        if "response_format 'verbose_json' is not compatible" in detail.lower():
+            response = await call_worker({"model": model, "format": "json", "output_format": "json"})
+            if response.status_code >= 400:
+                detail = response.text
+                try:
+                    body = response.json()
+                    if isinstance(body, dict):
+                        detail = str(body.get("detail", detail))
+                except Exception:
+                    pass
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=detail)
+
     payload = response.json()
     if not isinstance(payload, dict):
         raise HTTPException(status_code=500, detail="Worker response format is invalid.")
@@ -350,8 +373,7 @@ async def transcribe(
                 result = client.audio.transcriptions.create(
                     model=model,
                     file=audio_file,
-                    response_format="verbose_json",
-                    timestamp_granularities=["segment"],
+                    response_format="json",
                 )
             payload = {"text": getattr(result, "text", None), "segments": getattr(result, "segments", None)}
             parsed, used_minutes = parse_transcription_payload(payload)
