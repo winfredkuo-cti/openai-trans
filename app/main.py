@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from pydantic import BaseModel
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,6 +29,7 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", "change-this-in-production")
 WORKER_TRANSCRIBE_URL = os.getenv("WORKER_TRANSCRIBE_URL", "https://speech-transcribe-worker.theoder.workers.dev")
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_AUDIO_FILE_MB", "25"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+CLIENT_MAX_FILE_SIZE_MB = float(os.getenv("CLIENT_MAX_AUDIO_FILE_MB", str(MAX_FILE_SIZE_MB)))
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
 TXT_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 SRT_TRANSCRIBE_MODEL = "whisper-1"
@@ -57,6 +59,13 @@ users_table = Table(
     Column("created_at", DateTime, nullable=False, server_default=func.now()),
     Column("updated_at", DateTime, nullable=False, server_default=func.now()),
 )
+
+
+class TranscriptionCompletePayload(BaseModel):
+    text: str
+    srt: str
+    language: str = "auto"
+    used_minutes: float = 0.0
 
 
 def build_engine() -> Engine:
@@ -126,6 +135,28 @@ def extract_audio_minutes(payload: dict[str, Any]) -> float:
         duration = float(payload.get("duration", 0) or 0)
         max_end = duration
     return max(0.0, max_end / 60.0)
+
+
+def extract_srt_minutes(srt: str) -> float:
+    max_timestamp = 0.0
+    for line in srt.splitlines():
+        if "-->" not in line:
+            continue
+        _start, end = line.split("-->", 1)
+        timestamp = end.strip().split()[0]
+        try:
+            hours_part, minutes_part, seconds_part = timestamp.split(":")
+            seconds_text, milliseconds_text = seconds_part.split(",", 1)
+            total = (
+                int(hours_part) * 3600
+                + int(minutes_part) * 60
+                + int(seconds_text)
+                + int(milliseconds_text[:3].ljust(3, "0")) / 1000
+            )
+        except ValueError:
+            continue
+        max_timestamp = max(max_timestamp, total)
+    return max_timestamp / 60.0
 
 
 def parse_transcription_payload(payload: dict[str, Any]) -> tuple[dict[str, str], float]:
@@ -324,7 +355,11 @@ async def transcribe_via_worker(
 async def home(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         "index.html",
-        {"request": request, "google_client_id": GOOGLE_CLIENT_ID, "max_file_mb": MAX_FILE_SIZE_MB},
+        {
+            "request": request,
+            "google_client_id": GOOGLE_CLIENT_ID,
+            "max_file_mb": CLIENT_MAX_FILE_SIZE_MB,
+        },
     )
 
 
@@ -425,6 +460,59 @@ async def admin_users(request: Request) -> dict[str, Any]:
     with engine.begin() as conn:
         rows = conn.execute(select(users_table).order_by(users_table.c.updated_at.desc())).mappings().all()
     return {"users": [serialize_admin_user(dict(row)) for row in rows]}
+
+
+@app.get("/api/transcribe/options")
+async def transcribe_options(request: Request) -> dict[str, Any]:
+    sig = request.cookies.get("session_sig")
+    if sig != SESSION_SECRET:
+        raise HTTPException(status_code=401, detail="Please sign in with Google first.")
+    user = get_current_user(request)
+    if float(user["remaining_minutes"]) <= 0:
+        raise HTTPException(status_code=403, detail="No remaining minutes. Please contact admin.")
+    if not WORKER_TRANSCRIBE_URL:
+        raise HTTPException(status_code=400, detail="No available transcription backend.")
+    return {
+        "worker_url": WORKER_TRANSCRIBE_URL,
+        "max_file_mb": MAX_FILE_SIZE_MB,
+        "txt_model": TXT_TRANSCRIBE_MODEL,
+        "srt_model": SRT_TRANSCRIBE_MODEL,
+    }
+
+
+@app.post("/api/transcribe/complete")
+async def transcribe_complete(request: Request, payload: TranscriptionCompletePayload) -> dict[str, Any]:
+    sig = request.cookies.get("session_sig")
+    if sig != SESSION_SECRET:
+        raise HTTPException(status_code=401, detail="Please sign in with Google first.")
+    user = get_current_user(request)
+    language_code = normalize_language(payload.language)
+    parsed = {"text": payload.text.strip(), "srt": payload.srt.strip()}
+    if not parsed["text"] or not parsed["srt"]:
+        raise HTTPException(status_code=400, detail="Transcription result is incomplete.")
+    if language_code == "zh":
+        parsed = {
+            "text": to_traditional_chinese(parsed["text"]),
+            "srt": to_traditional_chinese(parsed["srt"]),
+        }
+
+    srt_minutes = extract_srt_minutes(parsed["srt"])
+    used_minutes = max(srt_minutes, float(payload.used_minutes or 0.0))
+    if used_minutes <= 0:
+        used_minutes = 0.1
+    remaining = max(0.0, float(user["remaining_minutes"]) - used_minutes)
+    with engine.begin() as conn:
+        conn.execute(
+            users_table.update()
+            .where(users_table.c.email == user["email"])
+            .values(remaining_minutes=remaining, updated_at=func.now())
+        )
+    return {
+        "text": parsed["text"],
+        "srt": parsed["srt"] if parsed["srt"].endswith("\n") else f"{parsed['srt']}\n",
+        "used_minutes": round(used_minutes, 2),
+        "remaining_minutes": round(remaining, 2),
+    }
 
 
 @app.post("/api/transcribe")

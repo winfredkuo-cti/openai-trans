@@ -49,7 +49,8 @@
 ## 備註
 - 網頁不顯示 API Key 欄位，金鑰可完全留在 Worker 或伺服器環境變數。
 - 上傳限制為音檔：`mp3`、`wav`、`m4a`。
-- 預設單檔上限為 `25MB`，可用 `MAX_AUDIO_FILE_MB` 調整。
+- 前端單檔上限預設為 `25MB`，可用 `MAX_AUDIO_FILE_MB` 調整。
+- Vercel Function 的請求上限約為 `4.5MB`；正式部署時，大音檔會由瀏覽器直接送到 Worker，Vercel 只處理登入、額度檢查與扣分鐘。
 - TXT 固定使用 `gpt-4o-mini-transcribe`，SRT 固定使用 `whisper-1`。
 - 若已知音檔語言，建議在上傳前指定語言，可讓語音辨識更快速。
 - 選擇繁體中文時，TXT / SRT 會統一輸出繁體中文。
