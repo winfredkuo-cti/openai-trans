@@ -189,46 +189,58 @@ function parseWorkerPayload(payload) {
   };
 }
 
-async function transcribeWithWorker({ workerUrl, file, model, language, responseFormat }) {
+function buildWorkerFormData({ file, model, language, responseFormat, mode }) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("model", model);
-  formData.append("response_format", responseFormat);
+  if (mode === "response_format") {
+    formData.append("response_format", responseFormat);
+  }
+  if (mode === "format") {
+    formData.append("format", "json");
+    formData.append("output_format", "json");
+  }
   if (language !== "auto") {
     formData.append("language", language);
   }
   if (language === "zh") {
     formData.append("prompt", "請使用繁體中文（台灣用字）輸出。");
   }
+  return formData;
+}
 
-  let response;
+async function postToWorker(workerUrl, formData) {
   try {
-    response = await fetch(workerUrl, {
+    return await fetch(workerUrl, {
       method: "POST",
       body: formData,
     });
   } catch (error) {
     throw new Error("無法連線到轉寫服務，請確認 Worker 已允許網站直接上傳。");
   }
-  let data = await readResponse(response);
-  if (!response.ok && String(data.detail || "").toLowerCase().includes("response_format 'verbose_json' is not compatible")) {
-    formData.set("format", "json");
-    formData.set("output_format", "json");
-    formData.delete("response_format");
-    try {
-      response = await fetch(workerUrl, {
-        method: "POST",
-        body: formData,
-      });
-    } catch (error) {
-      throw new Error("無法連線到轉寫服務，請確認 Worker 已允許網站直接上傳。");
+}
+
+async function transcribeWithWorker({ workerUrl, file, model, language, responseFormat, label }) {
+  const attempts = ["simple", "response_format", "format"];
+  let lastDetail = "";
+
+  for (const mode of attempts) {
+    const formData = buildWorkerFormData({
+      file,
+      model,
+      language,
+      responseFormat,
+      mode,
+    });
+    const response = await postToWorker(workerUrl, formData);
+    const data = await readResponse(response);
+    if (response.ok) {
+      return parseWorkerPayload(data);
     }
-    data = await readResponse(response);
+    lastDetail = data.detail || `Worker 回應異常（${response.status}）`;
   }
-  if (!response.ok) {
-    throw new Error(data.detail || "辨識失敗");
-  }
-  return parseWorkerPayload(data);
+
+  throw new Error(`${label} 辨識失敗：${lastDetail}`);
 }
 
 async function refreshMe() {
@@ -245,6 +257,9 @@ async function readResponse(response) {
   const text = await response.text();
   if (response.status === 413 || text.toLowerCase().includes("request ent")) {
     throw new Error(`檔案太大，請壓縮或切成 ${maxFileSizeMb}MB 以下再上傳。`);
+  }
+  if (!response.ok) {
+    return { detail: text || `伺服器回應異常（${response.status}）` };
   }
   throw new Error(text || `伺服器回應異常（${response.status}）`);
 }
@@ -353,6 +368,7 @@ form.addEventListener("submit", async (event) => {
         model: options.txt_model,
         language,
         responseFormat: "json",
+        label: "TXT",
       }),
       transcribeWithWorker({
         workerUrl: options.worker_url,
@@ -360,6 +376,7 @@ form.addEventListener("submit", async (event) => {
         model: options.srt_model,
         language,
         responseFormat: "verbose_json",
+        label: "SRT",
       }),
     ]);
 
