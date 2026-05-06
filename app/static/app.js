@@ -122,7 +122,7 @@ adminForm.addEventListener("submit", async (event) => {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const fileInput = document.getElementById("audioFile");
-  const model = document.getElementById("model").value;
+  const language = document.getElementById("language").value;
   const file = fileInput.files?.[0];
 
   if (!file) {
@@ -145,7 +145,7 @@ form.addEventListener("submit", async (event) => {
 
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("model", model);
+  formData.append("language", language);
 
   try {
     const response = await fetch("/api/transcribe", {

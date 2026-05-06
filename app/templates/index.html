@@ -22,12 +22,15 @@
 
         <form id="transcribe-form">
           <label class="field">
-            <span>模型</span>
-            <select id="model" name="model">
-              <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
-              <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
-              <option value="whisper-1">whisper-1</option>
+            <span>音檔語言</span>
+            <select id="language" name="language">
+              <option value="auto">自動辨識</option>
+              <option value="zh">繁體中文</option>
+              <option value="en">英文</option>
+              <option value="ja">日文</option>
+              <option value="ko">韓文</option>
             </select>
+            <small>有指定語言時，語音辨識通常會更快速。</small>
           </label>
 
           <label class="field">

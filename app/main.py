@@ -1,3 +1,4 @@
+import asyncio
 import os
 import tempfile
 import logging
@@ -27,6 +28,15 @@ WORKER_TRANSCRIBE_URL = os.getenv("WORKER_TRANSCRIBE_URL", "https://speech-trans
 MAX_FILE_SIZE_MB = int(os.getenv("MAX_AUDIO_FILE_MB", "25"))
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
+TXT_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
+SRT_TRANSCRIBE_MODEL = "whisper-1"
+LANGUAGE_CODES = {
+    "auto": None,
+    "zh": "zh",
+    "en": "en",
+    "ja": "ja",
+    "ko": "ko",
+}
 
 app = FastAPI(title="Speech to TXT/SRT")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -80,12 +90,18 @@ def format_srt_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{ms:03d}"
 
 
-def build_srt(segments: list[dict[str, Any]]) -> str:
+def get_payload_value(item: Any, key: str, default: Any = None) -> Any:
+    if isinstance(item, dict):
+        return item.get(key, default)
+    return getattr(item, key, default)
+
+
+def build_srt(segments: list[Any]) -> str:
     lines: list[str] = []
     for index, segment in enumerate(segments, start=1):
-        start = float(segment.get("start", 0))
-        end = float(segment.get("end", start))
-        text = str(segment.get("text", "")).strip()
+        start = float(get_payload_value(segment, "start", 0))
+        end = float(get_payload_value(segment, "end", start))
+        text = str(get_payload_value(segment, "text", "")).strip()
         if not text:
             continue
         lines.append(str(index))
@@ -99,7 +115,7 @@ def extract_audio_minutes(payload: dict[str, Any]) -> float:
     segments = payload.get("segments") or []
     max_end = 0.0
     for seg in segments:
-        end = float(seg.get("end", 0) or 0)
+        end = float(get_payload_value(seg, "end", 0) or 0)
         if end > max_end:
             max_end = end
     if max_end <= 0:
@@ -126,6 +142,13 @@ def is_allowed_audio_file(file: UploadFile) -> bool:
     suffix = Path(filename).suffix
     content_type = (file.content_type or "").lower()
     return suffix in AUDIO_EXTENSIONS or content_type in {"audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/m4a"}
+
+
+def normalize_language(language: str) -> str | None:
+    language_key = (language or "auto").strip().lower()
+    if language_key not in LANGUAGE_CODES:
+        raise HTTPException(status_code=400, detail="Unsupported audio language.")
+    return LANGUAGE_CODES[language_key]
 
 
 def get_current_email(request: Request) -> str | None:
@@ -182,10 +205,14 @@ def serialize_user(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def transcribe_via_worker(file: UploadFile, model: str) -> tuple[dict[str, str], float]:
-    file_bytes = await file.read()
-    content_type = file.content_type or "application/octet-stream"
-    filename = file.filename or "upload.bin"
+async def transcribe_via_worker(
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+    model: str,
+    language: str | None,
+    response_format: str = "json",
+) -> tuple[dict[str, str], float]:
 
     async def call_worker(form_data: dict[str, str]) -> httpx.Response:
         try:
@@ -199,7 +226,10 @@ async def transcribe_via_worker(file: UploadFile, model: str) -> tuple[dict[str,
             raise HTTPException(status_code=502, detail=f"Worker service unavailable: {exc}") from exc
 
     # Try multiple compatible keys because different Worker versions read different field names.
-    response = await call_worker({"model": model, "response_format": "json"})
+    form_data = {"model": model, "response_format": response_format}
+    if language:
+        form_data["language"] = language
+    response = await call_worker(form_data)
     if response.status_code >= 400:
         detail = response.text
         try:
@@ -209,7 +239,10 @@ async def transcribe_via_worker(file: UploadFile, model: str) -> tuple[dict[str,
         except Exception:
             pass
         if "response_format 'verbose_json' is not compatible" in detail.lower():
-            response = await call_worker({"model": model, "format": "json", "output_format": "json"})
+            fallback_form_data = {"model": model, "format": "json", "output_format": "json"}
+            if language:
+                fallback_form_data["language"] = language
+            response = await call_worker(fallback_form_data)
             if response.status_code >= 400:
                 detail = response.text
                 try:
@@ -330,7 +363,7 @@ async def admin_set_minutes(
 async def transcribe(
     request: Request,
     file: UploadFile = File(...),
-    model: str = Form("gpt-4o-mini-transcribe"),
+    language: str = Form("auto"),
 ) -> dict[str, Any]:
     sig = request.cookies.get("session_sig")
     if sig != SESSION_SECRET:
@@ -340,8 +373,10 @@ async def transcribe(
         raise HTTPException(status_code=403, detail="No remaining minutes. Please contact admin.")
     if not is_allowed_audio_file(file):
         raise HTTPException(status_code=400, detail="Only mp3, wav, and m4a are supported.")
+    language_code = normalize_language(language)
 
     file_size = 0
+    file_chunks: list[bytes] = []
     while True:
         chunk = await file.read(1024 * 1024)
         if not chunk:
@@ -349,10 +384,32 @@ async def transcribe(
         file_size += len(chunk)
         if file_size > MAX_FILE_SIZE_BYTES:
             raise HTTPException(status_code=400, detail=f"File is too large. Limit is {MAX_FILE_SIZE_MB} MB.")
-    await file.seek(0)
+        file_chunks.append(chunk)
+    file_bytes = b"".join(file_chunks)
+    filename = file.filename or "upload.bin"
+    content_type = file.content_type or "application/octet-stream"
 
     if WORKER_TRANSCRIBE_URL:
-        parsed, used_minutes = await transcribe_via_worker(file=file, model=model)
+        (txt_parsed, txt_minutes), (srt_parsed, srt_minutes) = await asyncio.gather(
+            transcribe_via_worker(
+                file_bytes=file_bytes,
+                filename=filename,
+                content_type=content_type,
+                model=TXT_TRANSCRIBE_MODEL,
+                language=language_code,
+                response_format="json",
+            ),
+            transcribe_via_worker(
+                file_bytes=file_bytes,
+                filename=filename,
+                content_type=content_type,
+                model=SRT_TRANSCRIBE_MODEL,
+                language=language_code,
+                response_format="verbose_json",
+            ),
+        )
+        parsed = {"text": txt_parsed["text"], "srt": srt_parsed["srt"]}
+        used_minutes = max(txt_minutes, srt_minutes)
     else:
         final_api_key = os.getenv("OPENAI_API_KEY")
         if not final_api_key:
@@ -361,22 +418,35 @@ async def transcribe(
         suffix = Path(file.filename or "audio").suffix or ".tmp"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp_path = Path(tmp.name)
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                tmp.write(chunk)
+            tmp.write(file_bytes)
 
         try:
             client = OpenAI(api_key=final_api_key)
+            language_kwargs = {"language": language_code} if language_code else {}
             with tmp_path.open("rb") as audio_file:
-                result = client.audio.transcriptions.create(
-                    model=model,
+                txt_result = client.audio.transcriptions.create(
+                    model=TXT_TRANSCRIBE_MODEL,
                     file=audio_file,
                     response_format="json",
+                    **language_kwargs,
                 )
-            payload = {"text": getattr(result, "text", None), "segments": getattr(result, "segments", None)}
-            parsed, used_minutes = parse_transcription_payload(payload)
+            with tmp_path.open("rb") as audio_file:
+                srt_result = client.audio.transcriptions.create(
+                    model=SRT_TRANSCRIBE_MODEL,
+                    file=audio_file,
+                    response_format="verbose_json",
+                    **language_kwargs,
+                )
+            txt_payload = {"text": getattr(txt_result, "text", None)}
+            srt_payload = {
+                "text": getattr(srt_result, "text", None),
+                "segments": getattr(srt_result, "segments", None),
+                "duration": getattr(srt_result, "duration", None),
+            }
+            txt_parsed, txt_minutes = parse_transcription_payload(txt_payload)
+            srt_parsed, srt_minutes = parse_transcription_payload(srt_payload)
+            parsed = {"text": txt_parsed["text"], "srt": srt_parsed["srt"]}
+            used_minutes = max(txt_minutes, srt_minutes)
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
