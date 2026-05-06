@@ -146,10 +146,46 @@ button:disabled {
   font-size: 1.1rem;
 }
 
+.admin-users-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.admin-users-header h2 {
+  margin: 0;
+}
+
 #admin-form {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  min-width: 680px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-size: 0.92rem;
 }
 
 @media (max-width: 640px) {

@@ -9,6 +9,8 @@ const logoutBtn = document.getElementById("logoutBtn");
 const adminPanel = document.getElementById("adminPanel");
 const adminForm = document.getElementById("admin-form");
 const adminStatus = document.getElementById("adminStatus");
+const adminUsersBody = document.getElementById("adminUsersBody");
+const refreshUsersBtn = document.getElementById("refreshUsersBtn");
 const allowedAudioExtensions = new Set([".mp3", ".wav", ".m4a"]);
 const maxFileSizeBytes = 25 * 1024 * 1024;
 
@@ -27,12 +29,87 @@ function setUserInfo(user) {
     logoutBtn.hidden = true;
     submitBtn.disabled = true;
     adminPanel.hidden = true;
+    renderAdminUsers([]);
     return;
   }
   userInfoEl.textContent = `${user.name}（${user.email}）剩餘 ${user.remaining_minutes} 分鐘`;
   logoutBtn.hidden = false;
   submitBtn.disabled = false;
   adminPanel.hidden = !user.is_admin;
+  if (user.is_admin) {
+    loadAdminUsers();
+  } else {
+    renderAdminUsers([]);
+  }
+}
+
+function formatDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-TW", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function renderAdminUsers(users) {
+  if (!adminUsersBody) return;
+  if (!users.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = "目前沒有使用者";
+    row.appendChild(cell);
+    adminUsersBody.replaceChildren(row);
+    return;
+  }
+  const rows = [];
+  for (const user of users) {
+    const row = document.createElement("tr");
+    const values = [
+      user.name || "",
+      user.email || "",
+      user.remaining_minutes,
+      user.is_admin ? "管理者" : "使用者",
+      formatDateTime(user.updated_at),
+    ];
+    for (const value of values) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    rows.push(row);
+  }
+  adminUsersBody.replaceChildren(...rows);
+}
+
+async function loadAdminUsers() {
+  if (!currentUser?.is_admin) return;
+  renderAdminMessage("載入中...");
+  try {
+    const resp = await fetch("/api/admin/users");
+    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(data.detail || "載入使用者失敗");
+    }
+    renderAdminUsers(data.users || []);
+  } catch (error) {
+    renderAdminMessage(error.message);
+  }
+}
+
+function renderAdminMessage(message) {
+  if (!adminUsersBody) return;
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = 5;
+  cell.textContent = message;
+  row.appendChild(cell);
+  adminUsersBody.replaceChildren(row);
 }
 
 function isAllowedAudioFile(file) {
@@ -117,7 +194,10 @@ adminForm.addEventListener("submit", async (event) => {
     return;
   }
   adminStatus.textContent = `${data.user.email} 已更新為 ${data.user.remaining_minutes} 分鐘`;
+  await loadAdminUsers();
 });
+
+refreshUsersBtn.addEventListener("click", loadAdminUsers);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

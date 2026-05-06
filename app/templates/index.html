@@ -49,6 +49,29 @@
             <button type="submit">更新分鐘</button>
           </form>
           <p id="adminStatus" class="status"></p>
+
+          <div class="admin-users-header">
+            <h2>使用者列表</h2>
+            <button id="refreshUsersBtn" type="button" class="secondary">重新整理</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>姓名</th>
+                  <th>Email</th>
+                  <th>剩餘分鐘</th>
+                  <th>身分</th>
+                  <th>更新時間</th>
+                </tr>
+              </thead>
+              <tbody id="adminUsersBody">
+                <tr>
+                  <td colspan="5">尚未載入</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <p id="status" class="status">等待上傳檔案</p>

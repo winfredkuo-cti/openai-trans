@@ -225,6 +225,14 @@ def serialize_user(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def serialize_admin_user(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **serialize_user(row),
+        "created_at": row["created_at"].isoformat() if row.get("created_at") else "",
+        "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else "",
+    }
+
+
 async def transcribe_via_worker(
     file_bytes: bytes,
     filename: str,
@@ -382,6 +390,17 @@ async def admin_set_minutes(
             select(users_table).where(users_table.c.email == target_email)
         ).mappings().first()
     return {"user": serialize_user(dict(updated))}
+
+
+@app.get("/api/admin/users")
+async def admin_users(request: Request) -> dict[str, Any]:
+    sig = request.cookies.get("session_sig")
+    if sig != SESSION_SECRET:
+        raise HTTPException(status_code=401, detail="Please sign in first.")
+    _admin = get_current_user(request, require_admin=True)
+    with engine.begin() as conn:
+        rows = conn.execute(select(users_table).order_by(users_table.c.updated_at.desc())).mappings().all()
+    return {"users": [serialize_admin_user(dict(row)) for row in rows]}
 
 
 @app.post("/api/transcribe")
