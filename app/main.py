@@ -2,6 +2,7 @@ import asyncio
 import os
 import tempfile
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,9 @@ LANGUAGE_CODES = {
     "en": "en",
     "ja": "ja",
     "ko": "ko",
+}
+LANGUAGE_PROMPTS = {
+    "zh": "請使用繁體中文（台灣用字）輸出。",
 }
 
 app = FastAPI(title="Speech to TXT/SRT")
@@ -151,6 +155,22 @@ def normalize_language(language: str) -> str | None:
     return LANGUAGE_CODES[language_key]
 
 
+@lru_cache(maxsize=1)
+def get_traditional_chinese_converter() -> Any:
+    try:
+        from opencc import OpenCC
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Traditional Chinese conversion dependency is not installed.",
+        ) from exc
+    return OpenCC("s2twp")
+
+
+def to_traditional_chinese(text: str) -> str:
+    return get_traditional_chinese_converter().convert(text)
+
+
 def get_current_email(request: Request) -> str | None:
     return request.cookies.get("session_email")
 
@@ -212,6 +232,7 @@ async def transcribe_via_worker(
     model: str,
     language: str | None,
     response_format: str = "json",
+    prompt: str | None = None,
 ) -> tuple[dict[str, str], float]:
 
     async def call_worker(form_data: dict[str, str]) -> httpx.Response:
@@ -229,6 +250,8 @@ async def transcribe_via_worker(
     form_data = {"model": model, "response_format": response_format}
     if language:
         form_data["language"] = language
+    if prompt:
+        form_data["prompt"] = prompt
     response = await call_worker(form_data)
     if response.status_code >= 400:
         detail = response.text
@@ -242,6 +265,8 @@ async def transcribe_via_worker(
             fallback_form_data = {"model": model, "format": "json", "output_format": "json"}
             if language:
                 fallback_form_data["language"] = language
+            if prompt:
+                fallback_form_data["prompt"] = prompt
             response = await call_worker(fallback_form_data)
             if response.status_code >= 400:
                 detail = response.text
@@ -374,6 +399,7 @@ async def transcribe(
     if not is_allowed_audio_file(file):
         raise HTTPException(status_code=400, detail="Only mp3, wav, and m4a are supported.")
     language_code = normalize_language(language)
+    language_prompt = LANGUAGE_PROMPTS.get(language_code or "")
 
     file_size = 0
     file_chunks: list[bytes] = []
@@ -398,6 +424,7 @@ async def transcribe(
                 model=TXT_TRANSCRIBE_MODEL,
                 language=language_code,
                 response_format="json",
+                prompt=language_prompt,
             ),
             transcribe_via_worker(
                 file_bytes=file_bytes,
@@ -406,6 +433,7 @@ async def transcribe(
                 model=SRT_TRANSCRIBE_MODEL,
                 language=language_code,
                 response_format="verbose_json",
+                prompt=language_prompt,
             ),
         )
         parsed = {"text": txt_parsed["text"], "srt": srt_parsed["srt"]}
@@ -423,12 +451,14 @@ async def transcribe(
         try:
             client = OpenAI(api_key=final_api_key)
             language_kwargs = {"language": language_code} if language_code else {}
+            prompt_kwargs = {"prompt": language_prompt} if language_prompt else {}
             with tmp_path.open("rb") as audio_file:
                 txt_result = client.audio.transcriptions.create(
                     model=TXT_TRANSCRIBE_MODEL,
                     file=audio_file,
                     response_format="json",
                     **language_kwargs,
+                    **prompt_kwargs,
                 )
             with tmp_path.open("rb") as audio_file:
                 srt_result = client.audio.transcriptions.create(
@@ -436,6 +466,7 @@ async def transcribe(
                     file=audio_file,
                     response_format="verbose_json",
                     **language_kwargs,
+                    **prompt_kwargs,
                 )
             txt_payload = {"text": getattr(txt_result, "text", None)}
             srt_payload = {
@@ -450,6 +481,12 @@ async def transcribe(
         finally:
             if tmp_path.exists():
                 tmp_path.unlink()
+
+    if language_code == "zh":
+        parsed = {
+            "text": to_traditional_chinese(parsed["text"]),
+            "srt": to_traditional_chinese(parsed["srt"]),
+        }
 
     remaining = max(0.0, float(user["remaining_minutes"]) - used_minutes)
     with engine.begin() as conn:

@@ -52,6 +52,7 @@
 - 預設單檔上限為 `25MB`，可用 `MAX_AUDIO_FILE_MB` 調整。
 - TXT 固定使用 `gpt-4o-mini-transcribe`，SRT 固定使用 `whisper-1`。
 - 若已知音檔語言，建議在上傳前指定語言，可讓語音辨識更快速。
+- 選擇繁體中文時，TXT / SRT 會統一輸出繁體中文。
 - 系統不保留辨識檔案，請立即下載 TXT / SRT。
 - 若未設定 `DATABASE_URL`，系統會回退使用本機 `app.db`（僅適合開發測試）。
 
